@@ -4,6 +4,7 @@
 #define	DLL32DEF_H
 
 #include <string>
+#include <stdint.h>
 #include "Cbuf.h"
 #include "types.h"
 CCbuf* ReadDefFile(const QString &fname);

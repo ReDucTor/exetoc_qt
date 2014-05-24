@@ -72,8 +72,6 @@ void FileLoader::LoadPE(uint32_t peoffs)
                pdata[i].phys_size);
     }
 
-    this->image_buf = p0;
-    this->image_len = imagelen;
     this->entry_buf = p0 + peh->entrypoint_rva;
     this->entry_offset = peh->entrypoint_rva+peh->image_base;
 

@@ -5,6 +5,16 @@
 #define FileLoad_H
 #include <cstdio>
 #include <stdint.h>
+#include <memory>
+
+namespace llvm
+{
+    namespace object
+    {
+        class COFFObjectFile;
+    }
+}
+
 enum enum_EXEType
 {
     enum_PE_exe		= 1,
@@ -179,13 +189,13 @@ class FileLoader
 private:
     enum_EXEType g_EXEType;
     enum_EXEFormat exetype;
-    FILE *efile;
     uint8_t *fbuff;
-    uint8_t *rawdata;
     // added build 14 bugfix
     uint32_t pdatarva;
     uint8_t *	image_buf;
     uint32_t	image_len;
+
+    std::unique_ptr<llvm::object::COFFObjectFile> m_binary;
 
 public:
     uint8_t *	entry_buf;
@@ -199,8 +209,6 @@ public:
     FileLoader(void);
     ~FileLoader(void);
     bool load(const char * fname);
-    int getexetype(void);
-    void setexetype(int etype);
     void savedb(char *fname,char *exename);
     bool loaddb(char *fname,char *exename);
 
@@ -208,14 +216,6 @@ public:
 private:
     void get_exetype();
     void	LoadPE(uint32_t offs);
-    void readcomfile(uint32_t fsize);
-    void readsysfile(uint32_t fsize);
-    void readpefile(uint32_t offs);
-    void readmzfile(uint32_t fsize);
-    void readlefile(void);
-    void readnefile(uint32_t offs);
-    void reados2file(void);
-    void readbinfile(uint32_t fsize);
     void subdirsummary(uint8_t *data,char *impname,uint32_t image_base);
     void leaf2summary(uint8_t *data,char *name,uint32_t image_base);
     void leafnodesummary(uint8_t *data,char *resname,uint32_t image_base);

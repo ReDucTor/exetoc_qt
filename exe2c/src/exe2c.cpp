@@ -21,6 +21,9 @@
 #include "DataType.h"
 #include "LibScanner.h"
 
+#include "llvm/Target/TargetMachine.h"
+
+
 using namespace boost::lambda;
 //KS_DECLARE_COMPONENT(exe2c, EXE2C)
 
@@ -33,6 +36,10 @@ void lib_exit(void);
 
 bool exe2c_Init()
 {
+    LLVMInitializeX86TargetInfo();
+    LLVMInitializeX86TargetMC();
+    LLVMInitializeX86AsmParser();
+    LLVMInitializeX86Disassembler();
     hpp_init();
     return true;
 }

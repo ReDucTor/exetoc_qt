@@ -8,6 +8,8 @@
 #include "00000.h"
 #include "FileLoad.h"
 
+#include <llvm/Object/COFF.h>
+
 //#define	SEG0	0x1000
 //static const int Load_Resources=0;
 //static const int Load_Debug=0;
@@ -18,7 +20,6 @@ FileLoader* g_FileLoader = NULL;
 
 FileLoader::FileLoader(void)
 {
-    efile=0;
     exetype=UNKNOWN_EXE;
     fbuff=NULL;
     g_EXEType = (enum_EXEType)0;
@@ -27,11 +28,6 @@ FileLoader::FileLoader(void)
 
 FileLoader::~FileLoader(void)
 {
-    delete fbuff;
-    if (efile)
-    {
-        fclose(efile);
-    }
 }
 
 bool	FileLoader::if_valid_ea(ea_t ea)
@@ -48,124 +44,39 @@ bool	FileLoader::if_valid_ea(ea_t ea)
     }
     return true;
 }
-void FileLoader::get_exetype()
-{
-    char mzhead[2]={0},exthead[2]={0};
-    uint32_t num;
-    uint32_t pe_offset=0;
 
-    exetype = UNKNOWN_EXE;
-    num=fread(mzhead,1,2,efile);
-    if (num != 2)
-        return;
-    if (((mzhead[0]=='M')&&(mzhead[1]=='Z'))||((mzhead[0]=='Z')&&(mzhead[1]=='M')))
-    {
-        exetype = BIN_EXE;
-
-        fseek(efile,0x3c,SEEK_SET);
-        if ( fread(&pe_offset,1,4,efile)==4 )
-        {
-            fseek(efile,pe_offset,SEEK_SET);
-        }
-        if ( fread(exthead,1,2,efile)==2 )
-        {
-            if ( ((short int *)exthead)[0]==0x4550 )
-                exetype=PE_EXE;
-            else if ( ((short int *)exthead)[0]==0x454e )
-                exetype=NE_EXE;
-            else if ( ((short int *)exthead)[0]==0x454c )
-                exetype=LE_EXE;
-            else if ( ((short int *)exthead)[0]==0x584c )
-                exetype=OS2_EXE;
-            else
-                exetype=MZ_EXE;
-        }
-    }
-}
 //checks header info, puts up initial loading dialog box and
 //selects info routine for file.
 bool FileLoader::load(const char * fname)
 {
-    uint32_t pe_offset;
-    uint32_t fsize;
-    if ( efile!=0 )return false;
-
-    efile=fopen(fname,"rb");
-    if ( efile==0 )
-        return false;
-
-    get_exetype();
-
-    if (exetype != PE_EXE)	//only support PE now
-        return false;
-    fseek(efile,0,SEEK_END);
-    fsize=ftell(efile);
-    fbuff=new uint8_t[fsize];
-    fseek(efile,0,SEEK_SET);
-    fread(fbuff,1,fsize,efile);
-
-    pe_offset = *(uint32_t *)(fbuff+0x3c);
-    switch ( exetype )
+    llvm::ErrorOr<llvm::object::Binary *> BinaryOrErr = llvm::object::createBinary(fname);
+    if (llvm::error_code EC = BinaryOrErr.getError())
     {
-        case BIN_EXE:
-            readbinfile(fsize);
-            break;
-        case PE_EXE:
-            //readpefile(pe_offset);
-            LoadPE(pe_offset);
-            break;
-        case MZ_EXE:
-            readmzfile(fsize);
-            break;
-        case OS2_EXE:
-            reados2file();
-            fclose(efile);
-            efile=0;
-            exetype=UNKNOWN_EXE;
-            return false; // at the moment;
-        case COM_EXE:
-            readcomfile(fsize);
-            break;
-        case SYS_EXE:
-            readsysfile(fsize);
-            break;
-        case LE_EXE:
-            readlefile();
-            fclose(efile);
-            efile=0;
-            exetype=UNKNOWN_EXE;
-            return false; // at the moment;
-        case NE_EXE:
-            readnefile(pe_offset);
-            break;
-        default:
-            fclose(efile);
-            efile=0;
-            exetype=UNKNOWN_EXE;
-            return false;
+        alert_prtf("Failed to load file: %s", EC.message().c_str());
+        return false;
     }
+
+    std::unique_ptr<llvm::object::Binary> binary(BinaryOrErr.get());
+
+    llvm::object::COFFObjectFile * obj = llvm::dyn_cast<llvm::object::COFFObjectFile>(binary.get());
+
+    if (!obj)
+    {
+        alert_prtf("%s is not a object file", fname);
+        return false;
+    }
+
+    m_binary.reset(obj);
+
+    // TODO: Verify exetype == PE_EXE
+    exetype = PE_EXE;
+
+    fbuff = (uint8_t*)m_binary->getData().data();
+
+    uint32_t pe_offset = *(uint32_t *)(fbuff+0x3c);
+
+    LoadPE(pe_offset);
     return true;
-}
-void FileLoader::readcomfile(uint32_t fsize)
-{
-}
-void FileLoader::readsysfile(uint32_t fsize)
-{
-}
-void FileLoader::readmzfile(uint32_t fsize)
-{
-}
-void FileLoader::readlefile(void)
-{
-}
-void FileLoader::readnefile(uint32_t )
-{
-}
-void FileLoader::reados2file(void)
-{
-}
-void FileLoader::readbinfile(uint32_t fsize)
-{
 }
 bool	IfInWorkSpace(ea_t off)
 {	//	check if off lie in our work space
