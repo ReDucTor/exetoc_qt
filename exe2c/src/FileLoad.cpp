@@ -21,7 +21,6 @@ FileLoader* g_FileLoader = NULL;
 FileLoader::FileLoader(void)
 {
     exetype=UNKNOWN_EXE;
-    fbuff=NULL;
     g_EXEType = (enum_EXEType)0;
     g_FileLoader=this;
 }
@@ -71,11 +70,7 @@ bool FileLoader::load(const char * fname)
     // TODO: Verify exetype == PE_EXE
     exetype = PE_EXE;
 
-    fbuff = (uint8_t*)m_binary->getData().data();
-
-    uint32_t pe_offset = *(uint32_t *)(fbuff+0x3c);
-
-    return LoadPE(pe_offset);
+    return LoadPE();
 }
 bool	IfInWorkSpace(ea_t off)
 {	//	check if off lie in our work space

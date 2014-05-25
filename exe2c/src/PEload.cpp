@@ -27,7 +27,7 @@ uint32_t	Peek_D(ea_t pos);
 
 static bool	PELoad_isMFC = false;
 
-bool FileLoader::LoadPE(uint32_t peoffs)
+bool FileLoader::LoadPE()
 {
     const llvm::object::coff_file_header * coffHeader;
     if (llvm::error_code EC = m_binary->getCOFFHeader(coffHeader))
@@ -78,7 +78,7 @@ bool FileLoader::LoadPE(uint32_t peoffs)
     {
         const llvm::object::coff_section *section = m_binary->getCOFFSection(sec);
         memcpy(p0 + section->VirtualAddress,
-            fbuff + section->PointerToRawData,
+            m_binary->getData().data() + section->PointerToRawData,
             section->SizeOfRawData);
     }
 

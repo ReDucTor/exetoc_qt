@@ -189,7 +189,6 @@ class FileLoader
 private:
     enum_EXEType g_EXEType;
     enum_EXEFormat exetype;
-    uint8_t *fbuff;
     // added build 14 bugfix
     uint32_t pdatarva;
     uint8_t *	image_buf;
@@ -215,7 +214,7 @@ public:
     bool        if_valid_ea(ea_t ea);
 private:
     void get_exetype();
-    bool LoadPE(uint32_t offs);
+    bool LoadPE();
     bool RelocImportTable();
     void subdirsummary(uint8_t *data,char *impname,uint32_t image_base);
     void leaf2summary(uint8_t *data,char *name,uint32_t image_base);
