@@ -62,7 +62,7 @@ bool FileLoader::load(const char * fname)
 
     if (!obj)
     {
-        alert_prtf("%s is not a object file", fname);
+        alert_prtf("%s is not a COFF object file", fname);
         return false;
     }
 
@@ -75,8 +75,7 @@ bool FileLoader::load(const char * fname)
 
     uint32_t pe_offset = *(uint32_t *)(fbuff+0x3c);
 
-    LoadPE(pe_offset);
-    return true;
+    return LoadPE(pe_offset);
 }
 bool	IfInWorkSpace(ea_t off)
 {	//	check if off lie in our work space

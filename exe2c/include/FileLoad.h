@@ -215,7 +215,8 @@ public:
     bool        if_valid_ea(ea_t ea);
 private:
     void get_exetype();
-    void	LoadPE(uint32_t offs);
+    bool LoadPE(uint32_t offs);
+    bool RelocImportTable();
     void subdirsummary(uint8_t *data,char *impname,uint32_t image_base);
     void leaf2summary(uint8_t *data,char *name,uint32_t image_base);
     void leafnodesummary(uint8_t *data,char *resname,uint32_t image_base);

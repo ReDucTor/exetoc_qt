@@ -13,6 +13,7 @@
 #include "00000.h"
 #include "FileLoad.h"
 #include "ApiManage.h"
+#include "llvm/Object/COFF.h"
 
 void	Disassembler_Init_offset(const uint8_t * code_buf, ea_t code_offset);
 extern std::string DLLDEF_Get_ApiName_from_ord(const char *pDLLname, uint16_t ord);
@@ -26,69 +27,76 @@ uint32_t	Peek_D(ea_t pos);
 
 static bool	PELoad_isMFC = false;
 
-int RelocationPE(PEHEADER* peh);
-int	RelocImportTable(PEHEADER* peh);
-
-void FileLoader::LoadPE(uint32_t peoffs)
+bool FileLoader::LoadPE(uint32_t peoffs)
 {
-    uint8_t * pestart = &fbuff[peoffs];
-    PEHEADER* peh = (PEHEADER *)pestart;
+    const llvm::object::coff_file_header * coffHeader;
+    if (llvm::error_code EC = m_binary->getCOFFHeader(coffHeader))
+    {
+        alert_prtf("Failed to get COFF header: %s\n", EC.message().c_str());
+        return false;
+    }
 
-    if (peh->flags & 0x2000)
+    if (coffHeader->Characteristics &
+        llvm::COFF::Characteristics::IMAGE_FILE_DLL)
     {
         g_EXEType = enum_PE_dll;
     }
-    switch (peh->subsystem)
+
+    const llvm::object::pe32_header * peHeader;
+    if (llvm::error_code EC = m_binary->getPE32Header(peHeader))
     {
-        case 1:		//	native device driver
-            g_EXEType = enum_PE_sys;
-            break;
-        case 2:		//	WINDOWS GUI
-        case 3:		//	WINDOWS CUI console
-            g_EXEType = enum_PE_exe;
-            break;
-        default:
-            alert_prtf("subsystem = %x",peh->subsystem);
-            assert(0);
-    }
-    //???? hpp_init();
-
-    PEObjData *pdata = (PEObjData *)(pestart+sizeof(PEHEADER)+(peh->numintitems-0x0a)*8);
-
-    uint32_t imagelen = peh->imagesize;
-
-    uint8_t * p0 = (uint8_t *)new uint8_t[imagelen];//VirtualAlloc(0,imagelen,MEM_COMMIT,PAGE_READWRITE);
-    if (p0 == NULL)
-    {
-        //error("VirtualAlloc get NULL\n");
-    }
-    //uint8_t * p0 = new uint8_t[imagelen];
-    memcpy(p0, pestart, peh->headersize);
-
-    for ( int i=0;i<peh->objects;i++ )
-    {
-        memcpy(p0 + pdata[i].rva,
-               fbuff + pdata[i].phys_offset,
-               pdata[i].phys_size);
+        alert_prtf("Failed to get PE header: %s\n", EC.message().c_str());
+        return false;
     }
 
-    this->entry_buf = p0 + peh->entrypoint_rva;
-    this->entry_offset = peh->entrypoint_rva+peh->image_base;
+    switch(peHeader->Subsystem)
+    {
+    case llvm::COFF::WindowsSubsystem::IMAGE_SUBSYSTEM_NATIVE:
+        g_EXEType = enum_PE_sys;
+        break;
+    case llvm::COFF::WindowsSubsystem::IMAGE_SUBSYSTEM_WINDOWS_GUI:
+    case llvm::COFF::WindowsSubsystem::IMAGE_SUBSYSTEM_WINDOWS_CUI:
+        g_EXEType = enum_PE_exe;
+        break;
+    default:
+        alert_prtf("Invalid subsystem = %x\n", peHeader->Subsystem);
+        assert(0);
+        return false;
+    }
+
+    uint8_t * p0 = new uint8_t[peHeader->SizeOfImage];
+    if (!p0)
+    {
+        alert_prtf("Unable to allocate space for image");
+        return false;
+    }
+
+    // NOTE: -4 as coffHeader is missing "PE\0\0"
+    memcpy(p0, (uint8_t*)(coffHeader) - 4, peHeader->SizeOfHeaders);
+
+    for (const llvm::object::SectionRef &sec : m_binary->sections())
+    {
+        const llvm::object::coff_section *section = m_binary->getCOFFSection(sec);
+        memcpy(p0 + section->VirtualAddress,
+            fbuff + section->PointerToRawData,
+            section->SizeOfRawData);
+    }
+
+    this->entry_buf = p0 + peHeader->AddressOfEntryPoint;
+    this->entry_offset = peHeader->AddressOfEntryPoint + peHeader->ImageBase;
 
     // Because the file was relocate to address different virtual addresses, so remember this difference
     // Afterwards the main program will use only that offset to access data, regardless of the actual buffer
     // Here because later on  RelocImportTable will use it
     Disassembler_Init_offset(this->entry_buf, this->entry_offset);
 
-    //RelocationPE((PEHEADER*)p0);
-    RelocImportTable((PEHEADER*)p0);
+    if (!RelocImportTable())
+    {
+        alert_prtf("Failed RelocImportTable()");
+        return false;
+    }
 
-    //	proc2(p0 + peh->entrypoint_rva,
-    //		  peh->entrypoint_rva+peh->image_base);
-
-    //	VirtualFree(p0,imagelen,0);
-    //delete p0;
-
+    return true;
 }
 /*
     problems left:
@@ -99,67 +107,83 @@ void FileLoader::LoadPE(uint32_t peoffs)
             and do "FreeLibrary" somewhere
     2.	Only do import with name, should add import with ORD
 */
-typedef struct
-{
-    uint32_t	tbl1_rva;	//00
-    uint32_t	dummy1;		//04
-    uint32_t	dummy2;		//08
-    uint32_t	dllname_rva;	//0c
-    uint32_t	tbl2_rva;	//10
-    //size of = 0x14
-}IMP_0;
 
 #include "DLL32DEF.h"
 
-int	RelocImportTable(PEHEADER* peh)
+bool FileLoader::RelocImportTable()
 {
-    uint8_t * pestart = (uint8_t *)peh;
-    uint8_t * pimp = pestart + peh->importtable_rva;
-
-    //	uint32_t	impsize = peh->import_datasize;
-
-    for (IMP_0*	pimp0 = (IMP_0*)pimp; pimp0->tbl1_rva != 0; pimp0++)
+    const llvm::object::pe32_header * peHeader;
+    if (llvm::error_code EC = m_binary->getPE32Header(peHeader))
     {
-        char *	pDLLname = (char *)pestart+pimp0->dllname_rva;
-        log_prtl("pDLLname is %s ",pDLLname);
-        //HMODULE hModule = GetModuleHandle(pDLLname);	//should I use Load ?
-        int32_t *p2 = (int32_t *)(pestart+pimp0->tbl2_rva);
-        uint32_t d;
-        while ((d = *p2) != 0)
+        alert_prtf("Failed to get PE header: %s\n", EC.message().c_str());
+        return false;
+    }
+
+    llvm::object::import_directory_iterator iter = m_binary->import_directory_begin();
+    llvm::object::import_directory_iterator end = m_binary->import_directory_end();
+    for (; iter != end; ++iter)
+    {
+        const llvm::object::import_directory_table_entry *dir;
+        if (iter->getImportTableEntry(dir))
+            return false;
+
+        // TODO: LLVM import directory iterators are broken
+        // http://llvm.org/bugs/show_bug.cgi?id=19849
+        if (!dir->ImportAddressTableRVA)
+            break;
+
+        llvm::StringRef dllName;
+        if (iter->getName(dllName))
         {
-            std::string apiname;
-            //uint32_t apiaddr = (uint32_t)GetProcAddress(hModule,apiname);
+            alert_prtf("Failed to get DLL name");
+            return false;
+        }
+        const char * pDLLname = dllName.data();
+
+        const llvm::object::import_lookup_table_entry32 *importLookupEntry;
+        if (iter->getImportLookupEntry(importLookupEntry))
+            return false;
+
+        uint32_t * importAddressEntry = (uint32_t*)((this->entry_buf - peHeader->AddressOfEntryPoint) + 
+                static_cast<uint32_t>(dir->ImportAddressTableRVA));
+
+        for (; importLookupEntry->data; ++importLookupEntry, ++importAddressEntry) 
+        {
             static uint32_t ggdd = 0xACBC0000;
             uint32_t apiaddr = ggdd++;
 
-            if ((d & 0xffff0000) == 0x80000000)
-            {	//Input by ord
-                apiname = DLLDEF_Get_ApiName_from_ord(pDLLname,(uint16_t)d);
+            std::string apiname;
+            if (importLookupEntry->isOrdinal())
+            {
+                //Input by ord
+                apiname = DLLDEF_Get_ApiName_from_ord(pDLLname,
+                       static_cast<uint16_t>(importLookupEntry->getOrdinal()));
                 if (apiname.size() == 0)
                 {
                     QString bufname;
-                    bufname = QString("ord_%1_%2").arg((uint16_t)d,16).arg(pDLLname);
+                    bufname = QString("ord_%1_%2").arg((uint16_t)importLookupEntry->getOrdinal(),16).arg(pDLLname);
                     bufname.replace(".","_");
                     apiname = bufname.toStdString();
                 }
-                //assert(apiname.size() < 80);
             }
             else
             {
-                uint8_t * pimpitem = pestart+d;
-                apiname = (char *)pimpitem+2;
-                assert(apiname.size() < 80);
+                uint16_t hint;
+                llvm::StringRef name;
+                if (m_binary->getHintName(importLookupEntry->getHintNameRVA(), hint, name))
+                {
+                    return false;
+                }
+                apiname = name.data();
             }
-            log_prtl("impapi is %s , %x",apiname,apiaddr);	// + 2byte
 
-            *p2 = apiaddr;	//fill imp table with api address
-            ApiManage::get()->New_ImportAPI(apiname, ptr2ea((uint8_t *)p2));
-            p2++;
+            *importAddressEntry = apiaddr;
+
+            ApiManage::get()->New_ImportAPI(apiname, ptr2ea(importAddressEntry));
         }
     }
 
-
-    return 0;
+    return true;
 }
 
 #define KSPE_IMAGE_SIZEOF_BASE_RELOCATION          8    // Because exclude the first TypeOffset
